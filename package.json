@@ -1,0 +1,26 @@
+{
+  "name": "sui-swap-bot",
+  "version": "1.0.0",
+  "description": "MMT Finance SUI-USDC swap bot",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "ts-node index.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@mmt-finance/clmm-sdk": "^1.0.14",
+    "@mysten/sui": "^1.28.0",
+    "@mysten/sui.js": "^0.54.1",
+    "@scure/bip32": "^1.6.2",
+    "@scure/bip39": "^1.5.4",
+    "decimal.js": "^10.5.0",
+    "dotenv": "^16.5.0",
+    "navi-sdk": "^1.6.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
