@@ -59,10 +59,10 @@ const POOLS = {
   },
 };
 
-// Default price fallback
+// Default price for stablecoins (fallback when pool data can't be fetched)
 const DEFAULT_PRICE = 1.0001;
 
-// Create readline interface
+// Create readline interface for user input
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -107,15 +107,9 @@ async function fetchCurrentPrice(sdk, pool) {
 
     const sqrtPriceX64 = poolData.current_sqrt_price;
     try {
-      const price = TickMath.sqrtPriceX64ToPrice(
-        sqrtPriceX64,
-        pool.decimalX,
-        pool.decimalY
-      );
-      console.log(`Current price from pool: 1 ${pool.tokenX} = ${price.toFixed(6)} ${pool.tokenY}`);
-      return price;
+      return TickMath.sqrtPriceX64ToPrice(sqrtPriceX64, pool.decimalX, pool.decimalY);
     } catch (priceCalcError) {
-      console.log('Error calculating price:', priceCalcError.message);
+      console.log('Error calculating price, using default:', priceCalcError.message);
       return new Decimal(DEFAULT_PRICE);
     }
   } catch (error) {
@@ -135,18 +129,10 @@ async function executeSwap(client, sdk, keypair, address, pool, sourceToken, amo
     price = new Decimal(1).div(currentPrice);
   }
 
-  const sourceDecimals = TOKENS[sourceToken].decimal;
-  const targetDecimals = TOKENS[targetToken].decimal;
-  const inputAmount = new Decimal(amountToSwap.toString()).div(Math.pow(10, sourceDecimals));
-  const estimatedOutputDecimal = inputAmount.mul(price);
-  const estimatedOutput = BigInt(estimatedOutputDecimal.mul(Math.pow(10, targetDecimals)).floor().toString());
-
-  console.log(`Estimated output: ${formatBalance(estimatedOutput, targetDecimals)} ${targetToken}`);
-
   const isXtoY = sourceToken === pool.tokenX;
-
   const coinType = TOKENS[sourceToken].type;
   let coins;
+
   if (useAllCoins) {
     const allCoins = await client.getCoins({ owner: address, coinType });
     coins = allCoins.data;
@@ -259,6 +245,14 @@ async function main() {
 
     const balances = await checkWalletBalance(client, address);
 
+    // Cek dulu apakah ada cukup SUI untuk gas fee
+    const MIN_REQUIRED_SUI = BigInt(100_000_000); // 0.1 SUI
+    if (balances.SUI.balance < MIN_REQUIRED_SUI) {
+      throw new Error(
+        `Insufficient SUI for gas fees. Need at least ${formatBalance(MIN_REQUIRED_SUI, TOKENS.SUI.decimal)} SUI`
+      );
+    }
+
     console.log('\nAvailable pools:');
     Object.keys(POOLS).forEach((poolName, index) => {
       console.log(`${index + 1}. ${poolName}`);
@@ -290,6 +284,15 @@ async function main() {
 
       if (amountToSwap <= 0) throw new Error('Amount must be greater than 0');
       if (amountToSwap > balances[sourceToken].balance) throw new Error(`Insufficient ${sourceToken} balance`);
+    } else {
+      const coinType = TOKENS[sourceToken].type;
+      const allCoins = await client.getCoins({ owner: address, coinType });
+      const totalBalance = allCoins.data.reduce((acc, coin) => acc + BigInt(coin.balance), BigInt(0));
+
+      if (totalBalance <= 0) throw new Error(`No ${sourceToken} balance available to swap`);
+
+      amountToSwap = totalBalance;
+      console.log(`Swapping all ${sourceToken}: ${formatBalance(amountToSwap, TOKENS[sourceToken].decimal)} (${amountToSwap})`);
     }
 
     const wantLoop = await askQuestion('\nLoop swap (back and forth)? (y/n): ');
@@ -297,15 +300,15 @@ async function main() {
       const loopCountInput = await askQuestion('Enter number of loop cycles (default: 1): ');
       const loopCount = loopCountInput.trim() === '' ? 1 : parseInt(loopCountInput);
 
-      const intervalInput = await askQuestion('Enter interval between swaps in seconds (default: 60): ');
+      const intervalInput = await askQuestion('Interval between swaps in seconds (default: 60): ');
       const intervalSeconds = intervalInput.trim() === '' ? 60 : parseInt(intervalInput);
 
-      console.log(`\nStarting ${loopCount} bidirectional swap cycles with ${intervalSeconds} second intervals...`);
+      console.log(`\nStarting ${loopCount} bidirectional swap cycles...\n`);
 
       for (let i = 0; i < loopCount; i++) {
-        console.log(`\n--- Executing swap cycle ${i + 1}/${loopCount} ---`);
+        console.log(`--- Cycle ${i + 1}/${loopCount} ---`);
 
-        console.log(`\nSwap 1: ${sourceToken} → ${sourceToken === pool.tokenX ? pool.tokenY : pool.tokenX}`);
+        console.log(`Swap 1: ${sourceToken} → ${sourceToken === pool.tokenX ? pool.tokenY : pool.tokenX}`);
         const swap1Result = await executeSwap(
           client,
           sdk,
@@ -331,7 +334,7 @@ async function main() {
           swapBackAmount = amountToSwap;
         }
 
-        console.log(`\nSwap 2: ${targetToken} → ${sourceToken}`);
+        console.log(`Swap 2: ${targetToken} → ${sourceToken}`);
         const swap2Result = await executeSwap(
           client,
           sdk,
@@ -345,12 +348,12 @@ async function main() {
         );
 
         if (i < loopCount - 1) {
-          console.log(`Waiting ${intervalSeconds} seconds until next cycle...`);
+          console.log(`\nWaiting ${intervalSeconds} seconds until next cycle...`);
           await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
           await checkWalletBalance(client, address);
         }
       }
-      console.log(`\nCompleted ${loopCount} bidirectional swap cycles`);
+      console.log(`\n✅ Completed ${loopCount} bidirectional swap cycles`);
     } else {
       await executeSwap(client, sdk, keypair, address, pool, sourceToken, amountToSwap, slippage, swapAll);
     }
